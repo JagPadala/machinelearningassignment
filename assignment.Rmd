@@ -1,0 +1,97 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Florian Süßer"
+date: "13. Juni 2015"
+output: html_document
+---
+
+head(training)
+
+Without further hesitation, I remove all columns which contain no data, NAs and are not of relevance.  We want to use only behavioural data to predict right/wrong exercises. The first seven columns seem to indicate formal details about the experiment such as time, subject and setting.
+Let us just briefly see if there is a difference between the subjects:
+```{r}
+#setwd("coursera/")
+library(caret)
+library(data.table)
+training <- read.csv("pml-training.csv")
+qplot(data = training, x = user_name, fill = classe)
+```
+The subjects seem to vary slightly in the amounts of different exercises they did but here we clearly see that there is probably no bias produced through the different subjects.  Also, we do not really want to use the user_name variable for prediction anyway.
+There also seem to be various columns with no values and with NAs.  We remove these:
+
+```{r}
+
+training <- training[, -c(1, 2, 3, 4, 5, 6, 7)]
+
+na_values <- apply(training, 2, function(x){sum(is.na(x))}) #see whether columns contain many NAs
+na_columns <- which(na_values > 0)
+na_columns
+training <- training[, -na_columns]
+empty_columns <- apply(training, 2, function(x){"#DIV/0!" %in% unique(x)})
+empty_columns <- which(empty_columns)
+training <- training[, -empty_columns]
+names(training)
+```
+
+We can also check whether our data has near zero values.  These could be considered to be deleted because they may have little predictive value.
+
+```{r}
+nsv <- nearZeroVar(training, saveMetrics = TRUE)
+nsv
+```
+
+There are no near zero values.
+
+For faster model building and training I use a reduced data set of about only 20% of the training set.
+
+Now let's try preprocessing.
+
+This model needs only 25 components to cover 0.95 of the variance, compared to 52 original variables.
+And test this model on another sample:
+
+```{r}
+set.seed(222)
+subset <- training[sample(1:nrow(training), nrow(training) * 0.2), ]
+
+preProc <- preProcess(training[, -53], thresh = 0.95, method = "pca")
+trainPC <- predict(preProc, subset[, -53])
+modelFit <- train(subset$classe ~ ., data = trainPC, method = "rf")
+
+sample <- training[sample(1:nrow(training), nrow(training) * 0.5), ]
+samplePC <- predict(preProc, sample[, -53])
+confusionMatrix(sample$classe, predict(modelFit, samplePC))
+```
+
+This gives an accuracy of 0.94.  But pre-processing is not necessarily useful with random Forests.  Since the outcome is categorical, an RF model seems appropriate.  But PCA processing makes most sense with linear models.  So lets try the model without PCA:
+
+We can apply this model to the same subset:
+
+```{r}
+set.seed(222)
+subset <- training[sample(1:nrow(training), nrow(training) * 0.2), ]
+
+modelFit2 <- train(classe ~ ., data = subset, method = "rf") #0.2
+
+
+set.seed(334)
+sample <- training[sample(1:nrow(training), nrow(training) * 0.5), ]
+confusionMatrix(sample$classe, predict(modelFit2, sample))
+```
+
+This yields an even higher accuracy of 0.978.
+
+Let us see if we can confirm this with k-fold cross validation:
+```{r}
+control <- trainControl(method = "repeatedcv", repeats = 3)
+modelFit3 <- train(classe ~ ., data = subset, method = "rf", trControl = control, parallel = TRUE)
+confusionMatrix(sample$classe, predict(modelFit3, sample))
+```
+
+It would also be interesting to try a boosting model, but in my R I get errors using the following:
+modelFit4 <- train(classe ~ ., data = as.data.frame(subset), method = "gbm", trControl = control, parallel = TRUE, verbose = FALSE) #gives errors
+
+But I don't think it is needed since the accuracy of the cross-validated RF model is quite satisfying.
+The out-of-sample error is likely to be very small since the cross validation in the train function averages the error, and the manual cross validating with the subsets differs nearly not at all from the sample error. As I used a smaller sample to train the models than I used to predict later on and the accuracy is high, the error in a completely new sample is supposed to be small.  If it is not, one possible explanation would be high subject relatedness of the variables.
+
+Interpretation:
+I don't know how accurate such technology needs to be nowadays.  But giving only in 2.5% of the repititions of an exercise a wrong signal is OK to me.  From an physiological point of view I can say that I want such a device to warn me if I repeatedly do an exercise wrong over a long time.  And this algorithm does detect a wrong execution on the second try if it does not on the first.  One wrong execution does not kill me but t´wrong repetition is detrimintal.  Hence I will be warned about a wrong execution more than soon enough.  So much for interpretation, I finish here.
